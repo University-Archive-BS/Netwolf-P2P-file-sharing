@@ -33,9 +33,9 @@ class Node:
             elif input_string.split()[0] != "GET":
                 print("[ERROR]: Invalid request.")
             else:
-                self.send_msg(input_string)
+                self.send_udp_msg(input_string)
 
-    def send_msg(self, msg):
+    def send_udp_msg(self, msg):
         message = msg.encode(ENCODING)
         msg_length = len(message)
         msg_length = str(msg_length).encode(ENCODING)
@@ -67,7 +67,7 @@ class Node:
                 port = self.get_free_tcp_port()
                 tcp_server = threading.Thread(target=self.file_server, args=(port,))
                 tcp_server.start()
-                self.send_msg("[MESSAGE]: " + self.label + " has " + msg.split()[1] + " and the TCP port is: " + str(port))
+                self.send_udp_msg("[MESSAGE]: " + self.label + " has " + msg.split()[1] + " and the TCP port is: " + str(port))
  
     def discovery_handler(self):
         pass
@@ -106,19 +106,14 @@ class Node:
             l = f.read(MESSAGE_LENGTH_SIZE)
         f.close()
         print('[MESSAGE]: Finish sending ' + file_name + '.')
+        
         connection.close()
         server.close()
 
     def file_receiver(self, file_name, port):
         receiver = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         receiver.connect((self.host, port))
-
-        message = file_name.encode(ENCODING)
-        msg_length = len(message)
-        msg_length = str(msg_length).encode(ENCODING)
-        msg_length += b' ' * (MESSAGE_LENGTH_SIZE - len(msg_length))
-        receiver.send(msg_length)
-        receiver.send(message)
+        self.send_tcp_msg(file_name, receiver)
 
         f = open('./' + self.label + '/' + file_name, 'wb')
         while True:
@@ -128,4 +123,14 @@ class Node:
             f.write(data)
         f.close()
         print('[MESSAGE]: Finish receiving ' + file_name + '.')
+
         receiver.close()
+
+    def send_tcp_msg(self, msg, conn):
+        message = msg.encode(ENCODING)
+        msg_length = len(message)
+        msg_length = str(msg_length).encode(ENCODING)
+        msg_length += b' ' * (MESSAGE_LENGTH_SIZE - len(msg_length))
+
+        conn.send(msg_length)
+        conn.send(message)
