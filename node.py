@@ -1,5 +1,6 @@
 import socket
 import threading
+import os
 
 class Node:
     def __init__(self, cluster_path, port):
@@ -7,9 +8,11 @@ class Node:
         self.host = socket.gethostbyname(socket.gethostname())
         self.upd_port = port
         self.udp_socket.bind((self.host, self.upd_port))
-        self.label = "N" + str(self.upd_port)
         self.ENCODING = 'utf-8'
         self.MESSAGE_LENGTH_SIZE = 64
+
+        self.label = "N" + str(self.upd_port)
+        os.mkdir(self.label)
 
         file = open(cluster_path, 'r')
         self.cluster = []
@@ -21,13 +24,12 @@ class Node:
     def client_handler(self):
         while True:
             input_string = input()
-            self.send_msg(input_string)
             if input_string == 'DISCONNECT': 
                 break
+            self.send_msg(input_string)
 
     def send_msg(self, msg):
         message = msg.encode(self.ENCODING)
-
         msg_length = len(message)
         msg_length = str(msg_length).encode(self.ENCODING)
         msg_length += b' ' * (self.MESSAGE_LENGTH_SIZE - len(msg_length))
