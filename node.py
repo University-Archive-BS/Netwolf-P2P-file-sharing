@@ -1,6 +1,9 @@
 import socket
 import threading
 import os
+import time
+import json
+import sys
 
 ENCODING = 'utf-8'
 MESSAGE_LENGTH_SIZE = 64
@@ -10,7 +13,9 @@ class Node:
         
         self.upd_port = port
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udp_socket.bind((self.host, self.upd_port))        
+        self.udp_socket.bind((self.host, self.upd_port))    
+
+        self.discovery_period = 3
 
         self.label = "N" + str(self.upd_port)
         if not os.path.exists(self.label):
@@ -20,7 +25,9 @@ class Node:
         self.cluster = []
         for line in file:
             info = list(line.split())
-            self.cluster.append(info)
+            if int(info[0]) != self.upd_port:
+                self.cluster.append(info[0])
+        self.cluster.append(str(self.upd_port))
         file.close()
 
     def client_handler(self):
@@ -35,18 +42,34 @@ class Node:
             else:
                 self.send_udp_msg(input_string)
 
-    def send_udp_msg(self, msg):
-        message = msg.encode(ENCODING)
-        msg_length = len(message)
-        msg_length = str(msg_length).encode(ENCODING)
-        msg_length += b' ' * (MESSAGE_LENGTH_SIZE - len(msg_length))
+    def send_udp_msg(self, msg=None, isDiscovery=False, port=False):
+        if isDiscovery:
+            message = json.dumps(self.cluster).encode(ENCODING)
+            msg_length = len(message)
+            msg_length = str(msg_length).encode(ENCODING)
+            msg_length += b' ' * (MESSAGE_LENGTH_SIZE - len(msg_length))
+            for node in self.cluster:
+                if int(node) != self.upd_port:
+                    self.udp_socket.sendto(msg_length, (self.host, int(node)))
+                    self.udp_socket.sendto(message, (self.host, int(node)))
+        elif port != False:
+            message = msg.encode(ENCODING)
+            msg_length = len(message)
+            msg_length = str(msg_length).encode(ENCODING)
+            msg_length += b' ' * (MESSAGE_LENGTH_SIZE - len(msg_length))
 
-        if self.upd_port == 7755:
-            self.udp_socket.sendto(msg_length, (self.host, 6655))
-            self.udp_socket.sendto(message, (self.host, 6655))
+            self.udp_socket.sendto(msg_length, (self.host, port))
+            self.udp_socket.sendto(message, (self.host, port))
         else:
-            self.udp_socket.sendto(msg_length, (self.host, 7755))
-            self.udp_socket.sendto(message, (self.host, 7755))
+            message = msg.encode(ENCODING)
+            msg_length = len(message)
+            msg_length = str(msg_length).encode(ENCODING)
+            msg_length += b' ' * (MESSAGE_LENGTH_SIZE - len(msg_length))
+
+            for node in self.cluster:
+                if int(node) != self.upd_port:
+                    self.udp_socket.sendto(msg_length, (self.host, int(node)))
+                    self.udp_socket.sendto(message, (self.host, int(node)))
 
     def server_handler(self):
         while True:
@@ -55,35 +78,48 @@ class Node:
             msg = self.udp_socket.recvfrom(message_length)[0].decode(ENCODING)   
 
             if msg.split()[0] == "GET":
-                print("[MESSAGE]: " + "N" + str(address[1]) + " wants " + msg.split()[1] + ".")  
+                print(f"[MESSAGE]: N{str(address[1])} wants {msg.split()[1]}.")  
+                if os.path.isfile('./' + self.label + '/' + msg.split()[1]):
+                    port = self.get_free_port()
+                    tcp_server = threading.Thread(target=self.file_server, args=(port,))
+                    tcp_server.start()
+                    self.send_udp_msg(msg=f"[MESSAGE]: {self.label} has {msg.split()[1]} and the TCP port is: {str(port)}", port=address[1])
             elif msg.split()[0] == "[MESSAGE]:":
                 print(msg)
                 tcp_client = threading.Thread(target=self.file_receiver, args=(msg.split()[3], int(msg.split()[-1])))
                 tcp_client.start()
+            elif str(self.upd_port) in json.loads(msg):
+                for node in json.loads(msg):
+                    if not node in self.cluster:
+                        self.cluster.append(node)
             else:
                 print(msg)
 
-            if os.path.isfile('./' + self.label + '/' + msg.split()[1]):
-                port = self.get_free_tcp_port()
-                tcp_server = threading.Thread(target=self.file_server, args=(port,))
-                tcp_server.start()
-                self.send_udp_msg("[MESSAGE]: " + self.label + " has " + msg.split()[1] + " and the TCP port is: " + str(port))
  
-    def discovery_handler(self):
-        pass
+    def discovery_sender_handler(self):
+        self.send_udp_msg(isDiscovery=True)
+        threading.Timer(self.discovery_period, self.discovery_sender_handler).start()
 
     def run(self):
         udp_client = threading.Thread(target=self.client_handler)
         udp_client.start()
 
         udp_server = threading.Thread(target=self.server_handler)
+        udp_server.daemon = True
         udp_server.start()
 
-        # server.join()
-        # discovery = threading.Thread(target=self.discovery_handler, args=(client, ))
-        # discovery.start()
+        discovery_sender = threading.Thread(target=self.discovery_sender_handler)
+        discovery_sender.daemon = True
+        discovery_sender.start()
 
-    def get_free_tcp_port(self):
+        try:
+            udp_client.join()
+            udp_server._stop()
+            discovery_sender._stop()
+        except:
+            sys.exit("Good luck!")
+
+    def get_free_port(self):
         tmp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         tmp_socket.bind(('', 0))
         address, port = tmp_socket.getsockname()
@@ -117,10 +153,14 @@ class Node:
 
         f = open('./' + self.label + '/' + file_name, 'wb')
         while True:
-            data = receiver.recv(MESSAGE_LENGTH_SIZE)
-            if not data:
-                break
-            f.write(data)
+            try:
+                data = receiver.recv(MESSAGE_LENGTH_SIZE)
+                if not data:
+                    break
+                f.write(data)
+            except:
+                pass
+
         f.close()
         print('[MESSAGE]: Finish receiving ' + file_name + '.')
 
